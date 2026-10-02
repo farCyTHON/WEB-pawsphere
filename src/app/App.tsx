@@ -99,6 +99,7 @@ import {
 } from "@/lib/auth";
 import { useAuth } from "@/contexts/AuthContext";
 import { getInitials, ROLE_HOME_PATHS } from "@/lib/auth-utils";
+import { useNotifications } from "@/hooks/useNotifications";
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 import { ShelterPetForm } from "@/components/shelter/PetForm";
 import { ShelterPetListings } from "@/components/shelter/PetListings";
@@ -133,6 +134,10 @@ import {
   VetPatientRecords,
 } from "@/components/medical/MedicalRecords";
 import { MessagesInbox } from "@/components/messages/Messages";
+import {
+  NotificationsScreen,
+  RecentNotifications,
+} from "@/components/notifications/NotificationsScreen";
 import { AdoptionCertificates } from "@/components/documents/AdoptionCertificates";
 import type { Pet, PublicPet } from "@/services/pets";
 
@@ -562,44 +567,6 @@ const PATIENT_RECORDS = [
     conditions: ["Hip Dysplasia"],
     image:
       "https://images.unsplash.com/photo-1601979031925-424e53b6caaa?w=100&h=100&fit=crop&auto=format",
-  },
-];
-
-const NOTIFICATIONS = [
-  {
-    id: 1,
-    text: "Your adoption application for Biscuit has moved to Interview stage.",
-    time: "10 min ago",
-    read: false,
-    type: "adoption",
-  },
-  {
-    id: 2,
-    text: "Appointment with Dr. Ariful Haque confirmed for Jul 30 at 3:00 PM.",
-    time: "1 hour ago",
-    read: false,
-    type: "appointment",
-  },
-  {
-    id: 3,
-    text: "Biscuit's vaccination is due in 7 days.",
-    time: "3 hours ago",
-    read: false,
-    type: "vaccine",
-  },
-  {
-    id: 4,
-    text: "New message from Dhaka Animal Rescue.",
-    time: "Yesterday",
-    read: true,
-    type: "message",
-  },
-  {
-    id: 5,
-    text: "Your application for Luna has been approved!",
-    time: "2 days ago",
-    read: true,
-    type: "adoption",
   },
 ];
 
@@ -1209,7 +1176,8 @@ function DashboardLayout({
   children: React.ReactNode;
   onSignOut: () => Promise<void>;
 }) {
-  const { profile } = useAuth();
+  const { profile, user } = useAuth();
+  const { unreadCount } = useNotifications(user?.id);
   const [collapsed, setCollapsed] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const navItems = NAV[role] || [];
@@ -1298,7 +1266,9 @@ function DashboardLayout({
               className="relative w-9 h-9 flex items-center justify-center text-[#6B7280] hover:bg-[#F8FAFC] rounded-[10px] transition-colors"
             >
               <Bell size={16} />
-              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full" />
+              {unreadCount > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-red-500 rounded-full" />
+              )}
             </button>
             <button
               onClick={() => setView("messages")}
@@ -2397,21 +2367,7 @@ function OwnerDashboard({
           Recent Activity
         </h3>
         <div className="space-y-3">
-          {NOTIFICATIONS.slice(0, 4).map((n) => (
-            <div key={n.id} className="flex items-start gap-3">
-              <div
-                className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${!n.read ? "bg-[#16A34A]" : "bg-[#E5E7EB]"}`}
-              />
-              <div>
-                <p className="text-sm text-[#374151]">
-                  {n.text}
-                </p>
-                <p className="text-xs text-[#9CA3AF] mt-0.5">
-                  {n.time}
-                </p>
-              </div>
-            </div>
-          ))}
+          <RecentNotifications />
         </div>
       </div>
     </div>
@@ -2750,52 +2706,6 @@ function AppointmentsScreen() {
       </div>
       {notice && <SuccessNotice message={notice} onClose={() => setNotice("")} />}
       <ConfirmationDialog open={cancelId !== null} title="Cancel this appointment?" description="The appointment will be removed from your calendar. You can book another time when needed." confirmLabel="Cancel appointment" onCancel={() => setCancelId(null)} onConfirm={() => { if (cancelId !== null) setAppointments((items) => items.filter((item) => item.id !== cancelId)); setNotice("The appointment has been cancelled and your calendar is updated."); setCancelId(null); }} />
-    </div>
-  );
-}
-
-function NotificationsScreen() {
-  const [notifs, setNotifs] = useState(NOTIFICATIONS);
-  const markAll = () =>
-    setNotifs((n) => n.map((x) => ({ ...x, read: true })));
-  return (
-    <div>
-      <PageTitle
-        title="Notifications"
-        action={
-          <button
-            onClick={markAll}
-            className="text-sm font-medium text-[#16A34A] hover:underline"
-          >
-            Mark all as read
-          </button>
-        }
-      />
-      {notifs.length === 0 ? <EmptyState title="You’re all caught up" text="New adoption updates, reminders, and messages will appear here." icon={Bell} action={<button onClick={() => setNotifs(NOTIFICATIONS)} className="rounded-[14px] bg-[#16A34A] px-4 py-2.5 text-xs font-semibold text-white">Restore demo notifications</button>} /> : <div className="bg-white border border-[#E5E7EB] rounded-[14px] divide-y divide-[#F1F5F9]">
-        {notifs.map((n) => (
-          <div
-            key={n.id}
-            onClick={() =>
-              setNotifs((prev) =>
-                prev.map((x) =>
-                  x.id === n.id ? { ...x, read: true } : x,
-                ),
-              )
-            }
-            className={`flex items-start gap-4 px-5 py-4 cursor-pointer hover:bg-[#F8FAFC] transition-colors ${!n.read ? "bg-[#F0FDF4]" : ""}`}
-          >
-            <div
-              className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${!n.read ? "bg-[#16A34A]" : "bg-transparent"}`}
-            />
-            <div className="flex-1">
-              <p className="text-sm text-[#374151]">{n.text}</p>
-              <p className="text-xs text-[#9CA3AF] mt-1">
-                {n.time}
-              </p>
-            </div>
-          </div>
-        ))}
-      </div>}
     </div>
   );
 }

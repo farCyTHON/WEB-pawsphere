@@ -5,10 +5,10 @@ import {
   getConversationMessages,
   getMessageContacts,
   getUserConversations,
-  isConversationUnread,
   markConversationRead,
   sendMessage,
   subscribeToConversation,
+  subscribeToInbox,
   type ChatMessage,
   type ConversationSummary,
   type ConversationType,
@@ -16,7 +16,11 @@ import {
   type MessageInsertPayload,
 } from '@/services/messages'
 
-export function useUserConversations() {
+function byCreatedAt(a: ChatMessage, b: ChatMessage) {
+  return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+}
+
+export function useUserConversations(userId?: string | null) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -45,34 +49,98 @@ export function useUserConversations() {
   }, [refresh])
 
   const markRead = useCallback((conversationId: string) => {
-    markConversationRead(conversationId)
+    const readAt = new Date().toISOString()
+    setConversations((prev) =>
+      prev.map((conversation) =>
+        conversation.id === conversationId
+          ? { ...conversation, unread: false, last_read_at: readAt }
+          : conversation,
+      ),
+    )
     setReadVersion((value) => value + 1)
+    void markConversationRead(conversationId).catch((readError) => {
+      console.warn('[PawSphere] Unable to persist conversation read state:', readError)
+    })
   }, [])
 
   const updateConversationLastMessage = useCallback(
-    (conversationId: string, content: string, timestamp: string) => {
+    (
+      conversationId: string,
+      content: string,
+      timestamp: string,
+      senderId?: string,
+    ) => {
       setConversations((prev) => {
         const index = prev.findIndex((c) => c.id === conversationId)
         if (index === -1) return prev
+        const incoming = Boolean(senderId && senderId !== userId)
         const updatedItem: ConversationSummary = {
           ...prev[index],
           last_message: content,
           last_message_at: timestamp,
+          last_sender_id: senderId ?? prev[index].last_sender_id,
           updated_at: timestamp,
+          unread: incoming ? true : prev[index].unread,
         }
         return [updatedItem, ...prev.filter((_, i) => i !== index)]
       })
     },
-    [],
+    [userId],
   )
 
-  const withUnread = conversations.map((conversation) => ({
-    ...conversation,
-    unread: isConversationUnread(conversation),
-  }))
+  // Sorted id list keeps the subscription stable while only message content changes.
+  const conversationKey = conversations
+    .map((conversation) => conversation.id)
+    .sort()
+    .join(',')
+
+  useEffect(() => {
+    if (!userId) return
+
+    const unsubscribe = subscribeToInbox(
+      {
+        userId,
+        conversationIds: conversationKey ? conversationKey.split(',') : [],
+      },
+      {
+        onMessage: (message) => {
+          updateConversationLastMessage(
+            message.conversation_id,
+            message.content,
+            message.created_at,
+            message.sender_id,
+          )
+        },
+        onConversation: () => {
+          void refresh(true)
+        },
+        onRead: (read) => {
+          setConversations((prev) =>
+            prev.map((conversation) => {
+              if (conversation.id !== read.conversation_id) return conversation
+              const lastAt = conversation.last_message_at
+              const stillUnread = Boolean(
+                lastAt &&
+                  conversation.last_sender_id &&
+                  conversation.last_sender_id !== userId &&
+                  new Date(lastAt) > new Date(read.last_read_at),
+              )
+              return {
+                ...conversation,
+                last_read_at: read.last_read_at,
+                unread: stillUnread,
+              }
+            }),
+          )
+        },
+      },
+    )
+
+    return unsubscribe
+  }, [conversationKey, refresh, updateConversationLastMessage, userId])
 
   return {
-    conversations: withUnread,
+    conversations,
     loading,
     error,
     refresh,
@@ -168,16 +236,18 @@ export function useConversationMessages(
 
         // STEP 3: Deduplicate by message ID & maintain chronological order
         setMessages((prev) => {
-          if (prev.some((m) => m.id === newMsg.id)) {
-            return prev
-          }
-          const next = [...prev, newMsg]
-          next.sort(
-            (a, b) =>
-              new Date(a.created_at).getTime() -
-              new Date(b.created_at).getTime(),
-          )
-          return next
+          const existing = prev.findIndex((m) => m.id === newMsg.id)
+          // An optimistic copy is already shown: keep its resolved sender name
+          // but adopt the database timestamp so ordering matches the server.
+          const next =
+            existing === -1
+              ? [...prev, newMsg]
+              : prev.map((m, index) =>
+                  index === existing
+                    ? { ...newMsg, sender_name: m.sender_name }
+                    : m,
+                )
+          return next.sort(byCreatedAt)
         })
 
         // Notify listener (e.g. to update conversation list)
@@ -216,13 +286,7 @@ export function useConversationMessages(
         }
         setMessages((prev) => {
           if (prev.some((m) => m.id === newId)) return prev
-          const next = [...prev, optimisticMsg]
-          next.sort(
-            (a, b) =>
-              new Date(a.created_at).getTime() -
-              new Date(b.created_at).getTime(),
-          )
-          return next
+          return [...prev, optimisticMsg].sort(byCreatedAt)
         })
       }
 

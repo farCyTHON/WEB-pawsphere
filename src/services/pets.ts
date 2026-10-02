@@ -71,6 +71,51 @@ export interface AvailablePetsResult {
   total: number
 }
 
+function toAppError(error: unknown, fallback: string): Error {
+  if (error instanceof Error && error.message.trim()) return error
+
+  if (typeof error === 'object' && error !== null) {
+    const err = error as {
+      message?: string
+      details?: string
+      hint?: string
+      code?: string
+      error?: string
+    }
+    const message = [err.message, err.error, err.details, err.hint]
+      .filter((part): part is string => Boolean(part && part.trim()))
+      .join(' — ')
+    if (message) return new Error(message)
+  }
+
+  if (typeof error === 'string' && error.trim()) return new Error(error)
+  return new Error(fallback)
+}
+
+function buildPetPayload(input: PetInput) {
+  const payload: Record<string, unknown> = {
+    name: input.name.trim(),
+    species: input.species.trim(),
+    breed: input.breed.trim(),
+    age: input.age,
+    gender: input.gender.trim(),
+    vaccinated: Boolean(input.vaccinated),
+    health_notes: input.health_notes ?? '',
+    status: input.status,
+  }
+
+  if (input.image_url) {
+    payload.image_url = input.image_url
+    payload.image_urls = [input.image_url]
+  }
+
+  if (input.image_path) {
+    payload.image_path = input.image_path
+  }
+
+  return payload
+}
+
 async function getCurrentShelterId(): Promise<string> {
   const user = await getCurrentUser()
   if (!user) throw new Error('You must be signed in as a shelter.')
@@ -84,10 +129,26 @@ async function getCurrentShelterId(): Promise<string> {
     .from('shelters')
     .select('id')
     .eq('id', user.id)
-    .single<{ id: string }>()
+    .maybeSingle<{ id: string }>()
 
-  if (error) throw error
-  return data.id
+  if (error) throw toAppError(error, 'Unable to load your shelter profile.')
+  if (data?.id) return data.id
+
+  const { error: insertError } = await supabase.from('shelters').insert({
+    id: user.id,
+    shelter_name: profile.full_name?.trim() || 'Shelter',
+    address: 'Address pending',
+    registration_number: user.id,
+  })
+
+  if (insertError && insertError.code !== '23505') {
+    throw toAppError(
+      insertError,
+      'Unable to create your shelter profile. Please try publishing again.',
+    )
+  }
+
+  return user.id
 }
 
 export async function uploadPetImage(file: File): Promise<UploadedPetImage> {
@@ -103,7 +164,9 @@ export async function uploadPetImage(file: File): Promise<UploadedPetImage> {
       upsert: false,
     })
 
-  if (error) throw error
+  if (error) {
+    throw toAppError(error, 'Unable to upload the pet photo. You can publish without a photo.')
+  }
 
   const { data } = supabase.storage.from('pets').getPublicUrl(imagePath)
   return { imageUrl: data.publicUrl, imagePath }
@@ -115,12 +178,13 @@ export async function createPet(input: PetInput): Promise<Pet> {
     .from('pets')
     .insert({
       shelter_id: shelterId,
-      ...input,
+      ...buildPetPayload(input),
     })
     .select('*')
     .single<Pet>()
 
-  if (error) throw error
+  if (error) throw toAppError(error, 'Unable to save the pet listing.')
+  if (!data) throw new Error('Unable to save the pet listing.')
   return data
 }
 
@@ -141,7 +205,7 @@ export async function getShelterPets(): Promise<Pet[]> {
   }
 
   const { data, error } = await query
-  if (error) throw error
+  if (error) throw toAppError(error, 'Unable to load pet listings.')
   return (data ?? []) as Pet[]
 }
 
@@ -153,13 +217,14 @@ export async function updatePet(
   const shelterId = await getCurrentShelterId()
   const { data, error } = await supabase
     .from('pets')
-    .update(input)
+    .update(buildPetPayload(input))
     .eq('id', petId)
     .eq('shelter_id', shelterId)
     .select('*')
     .single<Pet>()
 
-  if (error) throw error
+  if (error) throw toAppError(error, 'Unable to update the pet listing.')
+  if (!data) throw new Error('Unable to update the pet listing.')
 
   if (
     replacedImagePath &&
@@ -183,7 +248,7 @@ export async function deletePet(pet: Pet): Promise<void> {
     .eq('id', pet.id)
     .eq('shelter_id', shelterId)
 
-  if (error) throw error
+  if (error) throw toAppError(error, 'Unable to delete the pet listing.')
 
   if (pet.image_path) {
     const { error: storageError } = await supabase.storage

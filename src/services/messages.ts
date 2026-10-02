@@ -18,6 +18,9 @@ export interface ConversationSummary {
   pet_name: string | null
   last_message: string | null
   last_message_at: string | null
+  last_sender_id: string | null
+  last_read_at: string | null
+  unread: boolean
 }
 
 export interface ChatMessage {
@@ -37,17 +40,6 @@ export interface MessageContact {
   pet_id: string | null
   pet_name: string | null
   context_label: string
-}
-
-const READ_STORAGE_KEY = 'pawsphere.conversationReads'
-
-function readMap(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(READ_STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as Record<string, string>) : {}
-  } catch {
-    return {}
-  }
 }
 
 export async function createConversation(input: {
@@ -128,7 +120,12 @@ export async function createConversation(input: {
 export async function getUserConversations(): Promise<ConversationSummary[]> {
   const { data, error } = await supabase.rpc('get_user_conversations')
   if (error) throw error
-  return (data ?? []) as ConversationSummary[]
+  return ((data ?? []) as ConversationSummary[]).map((row) => ({
+    ...row,
+    last_sender_id: row.last_sender_id ?? null,
+    last_read_at: row.last_read_at ?? null,
+    unread: Boolean(row.unread),
+  }))
 }
 
 export async function getConversationMessages(
@@ -162,21 +159,14 @@ export async function getMessageContacts(): Promise<MessageContact[]> {
   return (data ?? []) as MessageContact[]
 }
 
-/** Frontend-only unread tracking via localStorage. */
-export function markConversationRead(conversationId: string): void {
-  const map = readMap()
-  map[conversationId] = new Date().toISOString()
-  localStorage.setItem(READ_STORAGE_KEY, JSON.stringify(map))
-}
-
-export function isConversationUnread(
-  conversation: ConversationSummary,
-): boolean {
-  if (!conversation.last_message_at) return false
-  const map = readMap()
-  const lastRead = map[conversation.id]
-  if (!lastRead) return true
-  return new Date(conversation.last_message_at) > new Date(lastRead)
+export async function markConversationRead(
+  conversationId: string,
+): Promise<string> {
+  const { data, error } = await supabase.rpc('mark_conversation_read', {
+    target_conversation_id: conversationId,
+  })
+  if (error) throw error
+  return (data as string) ?? new Date().toISOString()
 }
 
 export interface MessageInsertPayload {
@@ -185,6 +175,18 @@ export interface MessageInsertPayload {
   sender_id: string
   content: string
   created_at: string
+}
+
+export interface ConversationInsertPayload {
+  id: string
+  owner_id: string
+  participant_id: string
+}
+
+export interface ConversationReadPayload {
+  conversation_id: string
+  user_id: string
+  last_read_at: string
 }
 
 /**
@@ -213,11 +215,90 @@ export function subscribeToConversation(
       },
     )
     .subscribe((status, error) => {
-      if (status === 'CHANNEL_ERROR') {
-        console.warn(`[PawSphere Realtime] Channel error for conversation ${conversationId}:`, error)
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn(`[PawSphere Realtime] Channel ${status} for conversation ${conversationId}:`, error)
         if (onError) onError(error)
       }
     })
+
+  return () => {
+    void supabase.removeChannel(channel)
+  }
+}
+
+/**
+ * Subscribes to inbox-level changes for the signed-in user: new messages in any
+ * conversation they already have, plus conversations they are newly part of.
+ * Scoped by conversation id and user id so no global message stream is opened.
+ * Returns an unsubscribe cleanup function.
+ */
+export function subscribeToInbox(
+  input: { userId: string; conversationIds: string[]; channelName?: string },
+  handlers: {
+    onMessage: (message: MessageInsertPayload) => void
+    onConversation?: (conversation: ConversationInsertPayload) => void
+    onRead?: (read: ConversationReadPayload) => void
+  },
+): () => void {
+  const channel = supabase.channel(
+    input.channelName ?? `inbox:${input.userId}`,
+  )
+
+  if (input.conversationIds.length > 0) {
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `conversation_id=in.(${input.conversationIds.join(',')})`,
+      },
+      (payload) => {
+        if (payload.new && typeof payload.new === 'object') {
+          handlers.onMessage(payload.new as MessageInsertPayload)
+        }
+      },
+    )
+  }
+
+  channel.on(
+    'postgres_changes',
+    {
+      event: '*',
+      schema: 'public',
+      table: 'conversation_reads',
+      filter: `user_id=eq.${input.userId}`,
+    },
+    (payload) => {
+      const row = (payload.new ?? payload.old) as ConversationReadPayload | undefined
+      if (row?.conversation_id && row.last_read_at) {
+        handlers.onRead?.(row)
+      }
+    },
+  )
+
+  for (const column of ['owner_id', 'participant_id'] as const) {
+    channel.on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'conversations',
+        filter: `${column}=eq.${input.userId}`,
+      },
+      (payload) => {
+        if (payload.new && typeof payload.new === 'object') {
+          handlers.onConversation?.(payload.new as ConversationInsertPayload)
+        }
+      },
+    )
+  }
+
+  channel.subscribe((status, error) => {
+    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+      console.warn(`[PawSphere Realtime] Inbox channel ${status}:`, error)
+    }
+  })
 
   return () => {
     void supabase.removeChannel(channel)

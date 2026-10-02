@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { MessageSquare, Phone, Plus, Search, Send, Video, X } from 'lucide-react'
 
 import { useAuth } from '@/contexts/AuthContext'
+import { useCall } from '@/contexts/CallContext'
 import {
   useConversationMessages,
   useMessageContacts,
@@ -17,7 +18,7 @@ export function MessagesInbox() {
     refresh,
     markRead,
     updateConversationLastMessage,
-  } = useUserConversations()
+  } = useUserConversations(user?.id)
   const { contacts, loading: contactsLoading, startConversation } =
     useMessageContacts()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -25,7 +26,6 @@ export function MessagesInbox() {
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState('')
-  const [callNotice, setCallNotice] = useState('')
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeError, setComposeError] = useState('')
 
@@ -43,12 +43,15 @@ export function MessagesInbox() {
         newMsg.conversation_id,
         newMsg.content,
         newMsg.created_at,
+        newMsg.sender_id,
       )
       if (selectedId === newMsg.conversation_id) {
         markRead(newMsg.conversation_id)
       }
     },
   })
+
+  const call = useCall()
 
   useEffect(() => {
     if (!selectedId && conversations.length > 0) {
@@ -83,7 +86,12 @@ export function MessagesInbox() {
     try {
       setInput('')
       await send(text, user?.id)
-      updateConversationLastMessage(selectedId, text, new Date().toISOString())
+      updateConversationLastMessage(
+        selectedId,
+        text,
+        new Date().toISOString(),
+        user?.id,
+      )
       markRead(selectedId)
       void refresh(true)
     } catch (err) {
@@ -235,18 +243,34 @@ export function MessagesInbox() {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => setCallNotice('Voice call feature coming soon')}
+                      onClick={() =>
+                        void call.startCall({
+                          conversationId: selected.id,
+                          otherUserId: selected.other_user_id,
+                          otherUserName: selected.other_user_name,
+                          media: 'voice',
+                        })
+                      }
+                      disabled={call.status !== 'idle'}
                       aria-label="Voice call"
-                      title="Voice call coming soon"
-                      className="flex h-10 w-10 items-center justify-center rounded-[14px] border border-[#E5E7EB] bg-white text-[#16A34A] shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+                      title="Start a voice call"
+                      className="flex h-10 w-10 items-center justify-center rounded-[14px] border border-[#E5E7EB] bg-white text-[#16A34A] shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md disabled:translate-y-0 disabled:opacity-60"
                     >
                       <Phone size={17} />
                     </button>
                     <button
-                      onClick={() => setCallNotice('Video call feature coming soon')}
+                      onClick={() =>
+                        void call.startCall({
+                          conversationId: selected.id,
+                          otherUserId: selected.other_user_id,
+                          otherUserName: selected.other_user_name,
+                          media: 'video',
+                        })
+                      }
+                      disabled={call.status !== 'idle'}
                       aria-label="Video call"
-                      title="Video call coming soon"
-                      className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#16A34A] text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-[#15803D] hover:shadow-md"
+                      title="Start a video call"
+                      className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-[#16A34A] text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-[#15803D] hover:shadow-md disabled:translate-y-0 disabled:opacity-60"
                     >
                       <Video size={17} />
                     </button>
@@ -381,21 +405,6 @@ export function MessagesInbox() {
               </p>
             )}
           </div>
-        </div>
-      )}
-
-      {callNotice && (
-        <div
-          role="status"
-          className="fixed right-5 top-5 z-[90] rounded-[12px] border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700 shadow-lg"
-        >
-          {callNotice}
-          <button
-            onClick={() => setCallNotice('')}
-            className="ml-3 text-xs underline"
-          >
-            Dismiss
-          </button>
         </div>
       )}
 

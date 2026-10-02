@@ -307,7 +307,10 @@ export function ShelterAdoptionApplications() {
   } | null>(null)
   const [remarks, setRemarks] = useState('')
   const [saving, setSaving] = useState(false)
-  const [notice, setNotice] = useState('')
+  const [notice, setNotice] = useState<{
+    type: 'success' | 'error'
+    message: string
+  } | null>(null)
 
   const filtered = useMemo(
     () =>
@@ -326,18 +329,26 @@ export function ShelterAdoptionApplications() {
       } else {
         await changeStatus(action.application.id, action.status, remarks)
       }
-      setNotice(
-        action.status === 'rejected'
-          ? 'Application rejected successfully.'
-          : action.status === 'completed'
-            ? 'Adoption completed and pet marked adopted.'
-            : 'Application approved and pet marked reserved.',
-      )
+      setNotice({
+        type: 'success',
+        message:
+          action.status === 'rejected'
+            ? 'Application rejected successfully.'
+            : action.status === 'completed'
+              ? 'Adoption completed and pet marked adopted.'
+              : 'Application approved and pet marked reserved.',
+      })
       setAction(null)
       setRemarks('')
-      window.setTimeout(() => setNotice(''), 3000)
+      window.setTimeout(() => setNotice(null), 3000)
     } catch (saveError) {
-      setNotice(saveError instanceof Error ? saveError.message : 'Unable to update application.')
+      setNotice({
+        type: 'error',
+        message:
+          saveError instanceof Error
+            ? saveError.message
+            : 'Unable to update application.',
+      })
     } finally {
       setSaving(false)
     }
@@ -345,7 +356,7 @@ export function ShelterAdoptionApplications() {
 
   return (
     <div>
-      {notice && <Toast message={notice} />}
+      {notice && <Toast message={notice.message} tone={notice.type} />}
       <Header title="Adoption Applications" subtitle="Review and manage applications" />
       <div className="mb-6 flex gap-1.5">
         {['all', 'pending', 'review', 'interview', 'approved', 'rejected', 'completed'].map((item) => (
@@ -542,8 +553,25 @@ function ApplicationTableSkeleton() {
   return <div className="space-y-3 rounded-[14px] border border-[#E5E7EB] bg-white p-5">{Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-12 animate-pulse rounded bg-[#E5E7EB]" />)}</div>
 }
 
-function Toast({ message }: { message: string }) {
-  return <div role="status" className="fixed right-5 top-5 z-[90] rounded-[12px] border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700 shadow-lg">{message}</div>
+function Toast({
+  message,
+  tone = 'success',
+}: {
+  message: string
+  tone?: 'success' | 'error'
+}) {
+  return (
+    <div
+      role="status"
+      className={`fixed right-5 top-5 z-[90] rounded-[12px] border px-4 py-3 text-sm font-medium shadow-lg ${
+        tone === 'error'
+          ? 'border-red-200 bg-red-50 text-red-600'
+          : 'border-green-200 bg-green-50 text-green-700'
+      }`}
+    >
+      {message}
+    </div>
+  )
 }
 
 function formatDate(value: string) {

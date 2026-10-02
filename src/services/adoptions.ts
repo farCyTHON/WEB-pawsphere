@@ -102,6 +102,26 @@ export async function getApplicationById(
   return data
 }
 
+function toAppError(error: unknown, fallback: string): Error {
+  if (error instanceof Error && error.message.trim()) return error
+
+  if (typeof error === 'object' && error !== null) {
+    const err = error as {
+      message?: string
+      details?: string
+      hint?: string
+      error?: string
+    }
+    const message = [err.message, err.error, err.details, err.hint]
+      .filter((part): part is string => Boolean(part && part.trim()))
+      .join(' — ')
+    if (message) return new Error(message)
+  }
+
+  if (typeof error === 'string' && error.trim()) return new Error(error)
+  return new Error(fallback)
+}
+
 export async function updateApplicationStatus(
   applicationId: string,
   status: AdoptionStatus,
@@ -112,7 +132,7 @@ export async function updateApplicationStatus(
     next_status: status,
     status_remarks: remarks?.trim() || null,
   })
-  if (error) throw error
+  if (error) throw toAppError(error, 'Unable to update application.')
 }
 
 export async function completeAdoption(

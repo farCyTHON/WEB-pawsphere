@@ -34,6 +34,7 @@ interface PetFormProps {
 export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
   const [step, setStep] = useState(1)
   const [imageFile, setImageFile] = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [notice, setNotice] = useState<{
     type: 'success' | 'error'
@@ -48,6 +49,7 @@ export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
     formState: { errors },
   } = useForm<PetFormValues>({
     resolver: zodResolver(petSchema),
+    shouldUnregister: false,
     defaultValues: {
       name: '',
       species: 'Dog',
@@ -74,6 +76,16 @@ export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
     })
   }, [pet, reset])
 
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreview(null)
+      return
+    }
+    const preview = URL.createObjectURL(imageFile)
+    setImagePreview(preview)
+    return () => URL.revokeObjectURL(preview)
+  }, [imageFile])
+
   const steps = [
     'Basic Info',
     'Health Details',
@@ -97,12 +109,6 @@ export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
   }
 
   const onSubmit = async (values: PetFormValues) => {
-    if (!pet && !imageFile) {
-      setNotice({ type: 'error', message: 'Choose a pet image before publishing.' })
-      setStep(4)
-      return
-    }
-
     setSubmitting(true)
     setNotice(null)
     try {
@@ -117,6 +123,8 @@ export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
 
       const input: PetInput = {
         ...values,
+        health_notes: values.health_notes ?? '',
+        vaccinated: values.vaccinated ?? false,
         image_url: imageUrl,
         image_path: imagePath,
       }
@@ -133,16 +141,22 @@ export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
       })
       window.setTimeout(onSaved, 700)
     } catch (saveError) {
+      console.error('[PawSphere] Unable to save pet listing', saveError)
       setNotice({
         type: 'error',
-        message:
-          saveError instanceof Error
-            ? saveError.message
-            : 'Unable to save the pet listing.',
+        message: getErrorMessage(saveError),
       })
     } finally {
       setSubmitting(false)
     }
+  }
+
+  const onInvalid = () => {
+    setNotice({
+      type: 'error',
+      message: 'Please complete the required pet details before publishing.',
+    })
+    setStep(1)
   }
 
   return (
@@ -198,7 +212,7 @@ export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
       </div>
 
       <form
-        onSubmit={handleSubmit(onSubmit)}
+        onSubmit={handleSubmit(onSubmit, onInvalid)}
         className="rounded-[14px] border border-[#E5E7EB] bg-white p-6"
       >
         {step === 1 && (
@@ -260,13 +274,29 @@ export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
 
         {step === 4 && (
           <div>
-            <h3 className="mb-4 font-semibold text-[#111827]">Upload Photo</h3>
+            <h3 className="mb-1 font-semibold text-[#111827]">Photo</h3>
+            <p className="mb-4 text-sm text-[#6B7280]">
+              Photos are optional. You can publish this listing now and add an image later.
+            </p>
             <label className="block cursor-pointer rounded-[14px] border-2 border-dashed border-[#E5E7EB] p-12 text-center transition-colors hover:border-[#16A34A]">
-              <ImagePlus className="mx-auto text-[#16A34A]" size={32} />
+              {imagePreview || pet?.image_url ? (
+                <img
+                  src={imagePreview ?? pet?.image_url ?? ''}
+                  alt={imageFile?.name ?? pet?.name ?? 'Pet photo'}
+                  className="mx-auto mb-3 h-24 w-24 rounded-[12px] object-cover"
+                />
+              ) : (
+                <ImagePlus className="mx-auto text-[#16A34A]" size={32} />
+              )}
               <p className="mt-3 text-sm font-medium text-[#374151]">
-                {imageFile?.name ?? (pet?.image_url ? 'Choose a replacement image' : 'Click to upload an image')}
+                {imageFile?.name ??
+                  (pet?.image_url
+                    ? 'Choose a replacement image'
+                    : 'Click to upload an image')}
               </p>
-              <p className="mt-1 text-xs text-[#9CA3AF]">JPG or PNG, maximum 5MB</p>
+              <p className="mt-1 text-xs text-[#9CA3AF]">
+                Optional. JPG, PNG, or WEBP, maximum 5MB.
+              </p>
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
@@ -275,12 +305,23 @@ export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
                   const file = event.target.files?.[0] ?? null
                   if (file && file.size > 5 * 1024 * 1024) {
                     setNotice({ type: 'error', message: 'Image must be smaller than 5MB.' })
+                    event.target.value = ''
                     return
                   }
+                  setNotice(null)
                   setImageFile(file)
                 }}
               />
             </label>
+            {imageFile && (
+              <button
+                type="button"
+                onClick={() => setImageFile(null)}
+                className="mt-3 text-sm font-medium text-[#6B7280] hover:text-[#111827]"
+              >
+                Remove selected photo
+              </button>
+            )}
           </div>
         )}
 
@@ -308,7 +349,9 @@ export function ShelterPetForm({ pet, onSaved, onCancel }: PetFormProps) {
           </button>
           {step < 5 ? (
             <button type="button" onClick={() => void continueForm()} className={primaryButtonClass}>
-              Continue →
+              {step === 4 && !imageFile && !pet?.image_url
+                ? 'Continue without photo →'
+                : 'Continue →'}
             </button>
           ) : (
             <button type="submit" disabled={submitting} className={primaryButtonClass}>
@@ -339,6 +382,25 @@ function Field({
       {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
     </div>
   )
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message.trim()) return error.message
+  if (typeof error === 'object' && error !== null) {
+    const err = error as {
+      message?: string
+      details?: string
+      hint?: string
+      error?: string
+    }
+    const message = [err.message, err.error, err.details, err.hint]
+      .filter((part): part is string => Boolean(part && part.trim()))
+      .join(' — ')
+    if (message) return message
+  }
+  if (typeof error === 'string' && error.trim()) return error
+
+  return 'Unable to save the pet listing.'
 }
 
 const inputClass =

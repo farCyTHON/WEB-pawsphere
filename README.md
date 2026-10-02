@@ -237,7 +237,23 @@ npm install
    [`supabase/migrations/20260806_messaging.sql`](supabase/migrations/20260806_messaging.sql).
    This creates persistent conversations and messages for owner↔shelter and
    owner↔veterinarian chats with access policies based on applications and appointments.
-9. Copy `.env.example` to `.env.local` and add your project URL and public anon or
+9. Run
+   [`supabase/migrations/20260821_realtime_messages.sql`](supabase/migrations/20260821_realtime_messages.sql).
+   This adds the conversations and messages tables to the `supabase_realtime`
+   publication so chat updates arrive without a page refresh.
+10. Run
+   [`supabase/migrations/20260822_call_signaling.sql`](supabase/migrations/20260822_call_signaling.sql).
+   This authorizes the private Realtime Broadcast channels used for one-to-one
+   video call signaling, limited to the participants of each conversation.
+11. Run
+   [`supabase/migrations/20261003_conversation_reads.sql`](supabase/migrations/20261003_conversation_reads.sql).
+   This stores per-user conversation read state so unread dots stay in sync
+   across browsers and devices.
+12. Run
+   [`supabase/migrations/20261003_notifications_and_security.sql`](supabase/migrations/20261003_notifications_and_security.sql).
+   This creates persistent in-app notifications and tightens public profile-insert
+   rules so signup cannot create an admin account.
+13. Copy `.env.example` to `.env.local` and add your project URL and public anon or
    publishable key:
 
 ```bash
@@ -245,10 +261,15 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-public-key
 ```
 
-10. In **Authentication → URL Configuration**, set the local Site URL to
+   Video calling uses public STUN servers by default. To add a TURN server for peers
+   that cannot connect directly, set `VITE_WEBRTC_ICE_SERVERS` to a JSON array of
+   `RTCIceServer` entries. Camera and microphone access requires `localhost` during
+   development and HTTPS once deployed.
+
+14. In **Authentication → URL Configuration**, set the local Site URL to
    `http://localhost:5173` and add it to the allowed redirect URLs. Add the deployed
    application URL before production deployment.
-11. Configure email confirmation in **Authentication → Providers → Email**. When
+15. Configure email confirmation in **Authentication → Providers → Email**. When
    confirmation is enabled, new users must follow the email link before signing in.
 
 The public registration form can create owner, shelter, and veterinarian accounts.
