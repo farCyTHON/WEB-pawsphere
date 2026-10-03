@@ -37,14 +37,17 @@ export function useNotifications(userId?: string | null) {
       setLoading(false)
       return
     }
-    void refresh()
-  }, [refresh, userId])
 
-  useEffect(() => {
-    if (!userId) return
-    return subscribeToNotifications(userId, () => {
-      void refresh(true)
+    let active = true
+    void refresh()
+    const unsubscribe = subscribeToNotifications(userId, () => {
+      if (active) void refresh(true)
     })
+
+    return () => {
+      active = false
+      unsubscribe()
+    }
   }, [refresh, userId])
 
   const markRead = useCallback(async (notificationId: string) => {

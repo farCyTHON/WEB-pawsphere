@@ -1,3 +1,5 @@
+import type { RealtimeChannel } from '@supabase/supabase-js'
+
 import { supabase } from '@/lib/supabase'
 
 export type NotificationType =
@@ -39,31 +41,55 @@ export async function markAllNotificationsRead(): Promise<void> {
   if (error) throw error
 }
 
+const notificationListeners = new Map<string, Set<() => void>>()
+const notificationChannels = new Map<string, RealtimeChannel>()
+
+/**
+ * One postgres_changes channel per user. Extra hook instances (header bell +
+ * dashboard list) share that channel instead of calling .on() after subscribe().
+ */
 export function subscribeToNotifications(
   userId: string,
   onChange: () => void,
 ): () => void {
-  const channel = supabase
-    .channel(`notifications:${userId}`)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: 'notifications',
-        filter: `user_id=eq.${userId}`,
-      },
-      () => {
-        onChange()
-      },
-    )
-    .subscribe((status, error) => {
-      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-        console.warn('[PawSphere Notifications] Channel', status, error)
-      }
-    })
+  let listeners = notificationListeners.get(userId)
+  if (!listeners) {
+    listeners = new Set()
+    notificationListeners.set(userId, listeners)
+
+    const channel = supabase
+      .channel(`notifications:${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          notificationListeners.get(userId)?.forEach((listener) => listener())
+        },
+      )
+      .subscribe((status, error) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[PawSphere Notifications] Channel', status, error)
+        }
+      })
+
+    notificationChannels.set(userId, channel)
+  }
+
+  listeners.add(onChange)
 
   return () => {
-    void supabase.removeChannel(channel)
+    const current = notificationListeners.get(userId)
+    current?.delete(onChange)
+    if (current && current.size > 0) return
+
+    notificationListeners.delete(userId)
+    const channel = notificationChannels.get(userId)
+    notificationChannels.delete(userId)
+    if (channel) void supabase.removeChannel(channel)
   }
 }
